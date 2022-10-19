@@ -9,7 +9,7 @@ import (
 	jsonpatch "github.com/evanphx/json-patch/v5"
 	"github.com/go-logr/logr"
 	kyvernov1 "github.com/kyverno/kyverno/api/kyverno/v1"
-	"github.com/kyverno/kyverno/pkg/dclient"
+	"github.com/kyverno/kyverno/pkg/clients/dclient"
 	"github.com/kyverno/kyverno/pkg/engine"
 	"github.com/kyverno/kyverno/pkg/engine/context"
 	"github.com/kyverno/kyverno/pkg/engine/response"
@@ -50,6 +50,10 @@ func applyPolicy(policy kyvernov1.PolicyInterface, resource unstructured.Unstruc
 
 	if err := ctx.AddImageInfos(&resource); err != nil {
 		logger.Error(err, "unable to add image info to variables context")
+	}
+
+	if err := ctx.AddOperation("CREATE"); err != nil {
+		logger.Error(err, "unable to set operation in context")
 	}
 
 	engineResponseMutation, err = mutation(policy, resource, logger, ctx, namespaceLabels)
@@ -135,7 +139,7 @@ func extractPatchPath(patches [][]byte, log logr.Logger) string {
 	var resultPath []string
 	// extract the patch path and value
 	for _, patch := range patches {
-		if data, err := jsonutils.UnmarshalPatch(patch); err != nil {
+		if data, err := jsonutils.UnmarshalPatchOperation(patch); err != nil {
 			log.Error(err, "failed to decode the generate patch", "patch", string(patch))
 			continue
 		} else {

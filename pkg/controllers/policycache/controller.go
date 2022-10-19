@@ -1,9 +1,14 @@
 package policycache
 
 import (
+	"context"
+	"time"
+
+	"github.com/go-logr/logr"
 	kyvernov1 "github.com/kyverno/kyverno/api/kyverno/v1"
 	kyvernov1informers "github.com/kyverno/kyverno/pkg/client/informers/externalversions/kyverno/v1"
 	kyvernov1listers "github.com/kyverno/kyverno/pkg/client/listers/kyverno/v1"
+	"github.com/kyverno/kyverno/pkg/controllers"
 	pcache "github.com/kyverno/kyverno/pkg/policycache"
 	controllerutils "github.com/kyverno/kyverno/pkg/utils/controller"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -14,9 +19,16 @@ import (
 )
 
 const (
-	maxRetries = 10
-	workers    = 3
+	// Workers is the number of workers for this controller
+	Workers        = 3
+	ControllerName = "policycache-controller"
+	maxRetries     = 10
 )
+
+type Controller interface {
+	controllers.Controller
+	WarmUp() error
+}
 
 type controller struct {
 	cache pcache.Cache
@@ -29,12 +41,12 @@ type controller struct {
 	queue workqueue.RateLimitingInterface
 }
 
-func NewController(pcache pcache.Cache, cpolInformer kyvernov1informers.ClusterPolicyInformer, polInformer kyvernov1informers.PolicyInformer) *controller {
+func NewController(pcache pcache.Cache, cpolInformer kyvernov1informers.ClusterPolicyInformer, polInformer kyvernov1informers.PolicyInformer) Controller {
 	c := controller{
 		cache:      pcache,
 		cpolLister: cpolInformer.Lister(),
 		polLister:  polInformer.Lister(),
-		queue:      workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "policycache-controller"),
+		queue:      workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), ControllerName),
 	}
 	controllerutils.AddDefaultEventHandlers(logger, cpolInformer.Informer(), c.queue)
 	controllerutils.AddDefaultEventHandlers(logger, polInformer.Informer(), c.queue)
@@ -44,6 +56,7 @@ func NewController(pcache pcache.Cache, cpolInformer kyvernov1informers.ClusterP
 func (c *controller) WarmUp() error {
 	logger.Info("warming up ...")
 	defer logger.Info("warm up done")
+
 	pols, err := c.polLister.Policies(metav1.NamespaceAll).List(labels.Everything())
 	if err != nil {
 		return err
@@ -69,12 +82,11 @@ func (c *controller) WarmUp() error {
 	return nil
 }
 
-func (c *controller) Run(stopCh <-chan struct{}) {
-	controllerutils.Run(logger, c.queue, workers, maxRetries, c.reconcile, stopCh)
+func (c *controller) Run(ctx context.Context, workers int) {
+	controllerutils.Run(ctx, logger, ControllerName, time.Second, c.queue, workers, maxRetries, c.reconcile)
 }
 
-func (c *controller) reconcile(key, namespace, name string) error {
-	logger.Info("reconciling ...", "key", key, "namespace", namespace, "name", name)
+func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, namespace, name string) error {
 	policy, err := c.loadPolicy(namespace, name)
 	if err != nil {
 		if errors.IsNotFound(err) {

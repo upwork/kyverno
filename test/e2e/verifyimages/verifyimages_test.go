@@ -21,6 +21,8 @@ var (
 	policyGVR = e2e.GetGVR("kyverno.io", "v1", "clusterpolicies")
 	// Namespace GVR
 	namespaceGVR = e2e.GetGVR("", "v1", "namespaces")
+	// Secret GVR
+	secretGVR = e2e.GetGVR("", "v1", "secrets")
 
 	crdGVR = e2e.GetGVR("apiextensions.k8s.io", "v1", "customresourcedefinitions")
 
@@ -84,7 +86,8 @@ func TestImageVerify(t *testing.T) {
 		_ = e2eClient.DeleteClusteredResource(namespaceGVR, test.ResourceNamespace)
 
 		By("Wait Till Deletion of Namespace...")
-		err = e2e.GetWithRetry(1*time.Second, 15, func() error {
+		// deleting test-secret-pod might take some time. hence increasing timeout period
+		err = e2e.GetWithRetry(20*time.Second, 15, func() error {
 			_, err := e2eClient.GetClusteredResource(namespaceGVR, test.ResourceNamespace)
 			if err != nil {
 				return nil
@@ -120,6 +123,12 @@ func TestImageVerify(t *testing.T) {
 		})
 		Expect(err).NotTo(HaveOccurred())
 
+		if test.PolicyName == "secret-in-keys" {
+			By("Creating testsecret...")
+			_, err := e2eClient.CreateNamespacedResourceYaml(secretGVR, test.ResourceNamespace, "testsecret", secretResource)
+			Expect(err).NotTo(HaveOccurred())
+		}
+
 		Expect(e2eClient.ClusterPolicyReady(test.PolicyName)).To(BeTrue())
 
 		By("Creating Resource...")
@@ -138,7 +147,8 @@ func TestImageVerify(t *testing.T) {
 		// Clear Namespace
 		e2eClient.DeleteClusteredResource(namespaceGVR, nspace)
 		// Wait Till Deletion of Namespace
-		e2e.GetWithRetry(time.Duration(1*time.Second), 15, func() error {
+		// deleting test-secret-pod might take some time. hence increasing timeout period
+		e2e.GetWithRetry(time.Duration(20*time.Second), 15, func() error {
 			_, err := e2eClient.GetClusteredResource(namespaceGVR, nspace)
 			if err != nil {
 				return nil
@@ -149,27 +159,28 @@ func TestImageVerify(t *testing.T) {
 		By(fmt.Sprintf("Test %s Completed \n\n\n", test.TestName))
 
 	}
-	//CleanUp CRDs
+	// CleanUp CRDs
 	e2eClient.DeleteClusteredResource(crdGVR, crdName)
-
 }
 
 func Test_BoolFields(t *testing.T) {
 	framework.Setup(t)
-	framework.Run(t,
-		step.CreateClusterPolicy(cpolVerifyImages),
-		step.By("Checking spec.rules[0].verifyImages[0].mutateDigest is false ..."),
-		step.ExpectResource(id.ClusterPolicy("verify-images"), func(resource *unstructured.Unstructured) {
-			rules, found, err := unstructured.NestedSlice(resource.UnstructuredContent(), "spec", "rules")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(found).To(BeTrue())
-			verifyImages, found, err := unstructured.NestedSlice(rules[0].(map[string]interface{}), "verifyImages")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(found).To(BeTrue())
-			mutateDigest, found, err := unstructured.NestedBool(verifyImages[0].(map[string]interface{}), "mutateDigest")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(found).To(BeTrue())
-			Expect(mutateDigest).To(BeFalse())
-		}),
-	)
+	for _, field := range []string{"mutateDigest", "verifyDigest", "required"} {
+		framework.RunSubTest(t, field,
+			step.CreateClusterPolicy(cpolVerifyImages),
+			step.By(fmt.Sprintf("Checking spec.rules[0].verifyImages[0].%s is false ...", field)),
+			step.ExpectResource(id.ClusterPolicy("verify-images"), func(resource *unstructured.Unstructured) {
+				rules, found, err := unstructured.NestedSlice(resource.UnstructuredContent(), "spec", "rules")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(found).To(BeTrue())
+				verifyImages, found, err := unstructured.NestedSlice(rules[0].(map[string]interface{}), "verifyImages")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(found).To(BeTrue())
+				mutateDigest, found, err := unstructured.NestedBool(verifyImages[0].(map[string]interface{}), field)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(found).To(BeTrue())
+				Expect(mutateDigest).To(BeFalse())
+			}),
+		)
+	}
 }
